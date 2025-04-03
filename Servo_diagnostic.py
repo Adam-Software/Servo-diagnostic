@@ -30,6 +30,8 @@ CT_ADDRESS = {
     "P_CW_DEAD": 26,
     "P_CCW_DEAD": 27,
     "P_PROTECT_CURRENT": 28,
+    "P_OVERCURRENT_PROTECTION": 31,
+    "P_OVERLOAD_CURRENT": 32,
     "P_ROTATION_RUN": 35,
     "P_ANGLE_MODE": 36,
     "P_TORQUE_ENABLE": 40,
@@ -50,9 +52,17 @@ CT_ADDRESS = {
 # Default settings
 SCS_ID = 1  # Default SCServo ID
 BAUDRATE = 1000000  # SCServo default baudrate : 1000000
-DEVICENAME = 'COM3' #'/dev/ttyUSB0'  # Check which port is being used on your controller
-# ex) Windows: "COM1"   Linux: "/dev/ttyUSB0" Mac: "/dev/tty.usbserial-*"
+DEVICENAME = 'COM3'
 protocol_end = 1  # SCServo bit end(STS/SMS=0, SCS=1)
+
+# Global swap bytes setting
+swap_bytes_enabled = False
+
+
+def swap_bytes(value):
+    """Swap bytes in 2-byte value"""
+    return ((value & 0xFF) << 8) | ((value >> 8) & 0xFF)
+
 
 # Initialize PortHandler
 portHandler = PortHandler(DEVICENAME)
@@ -62,40 +72,30 @@ packetHandler = PacketHandler(protocol_end)
 
 
 def setup_connection():
-    # Open port
     if not portHandler.openPort():
         print("Failed to open the port")
         return False
-
-    # Set baudrate
     if not portHandler.setBaudRate(BAUDRATE):
         print("Failed to change the baudrate")
         return False
-
     return True
 
 
 def read_all_values(servo_id):
     results = {}
     for name, addr in CT_ADDRESS.items():
-        # Специальная обработка для P_CW_DEAD и P_CCW_DEAD
-        if name in ["P_CW_DEAD", "P_CCW_DEAD"]:
-            # Читаем как 1-байтовое значение
+        # 1-byte registers
+        if addr in [3, 4, 5, 6, 7, 8, 13, 14, 15, 19, 20, 21, 22, 23, 31, 35, 36, 40, 41, 48, 62, 63, 64, 66]:
             value, comm_result, error = packetHandler.read1ByteTxRx(portHandler, servo_id, addr)
-        # Для остальных адресов определяем размер автоматически
-        elif addr in [3, 4, 5, 6, 7, 8, 13, 14, 15, 19, 20, 21, 22, 23, 35, 36, 40, 41, 48, 62, 63, 64, 66]:
-            # 1-байтовые регистры
-            value, comm_result, error = packetHandler.read1ByteTxRx(portHandler, servo_id, addr)
-        else:
-            # 2-байтовые регистры с коррекцией порядка байт
+        else:  # 2-byte registers
             value, comm_result, error = packetHandler.read2ByteTxRx(portHandler, servo_id, addr)
-            value = ((value & 0xFF) << 8) | ((value >> 8) & 0xFF)
+            if swap_bytes_enabled:
+                value = swap_bytes(value)
 
         if comm_result == COMM_SUCCESS and error == 0:
             results[name] = value
         else:
             results[name] = "Error"
-
     return results
 
 
@@ -106,12 +106,12 @@ def read_address(servo_id, address_name):
 
     addr = CT_ADDRESS[address_name]
 
-    # Determine data size
-    if addr in [3, 4, 5, 6, 7, 8, 13, 14, 15, 19, 20, 21, 22, 23, 35, 36, 40, 41, 48, 62, 63, 64, 66]:
+    if addr in [3, 4, 5, 6, 7, 8, 13, 14, 15, 19, 20, 21, 22, 23, 31, 35, 36, 40, 41, 48, 62, 63, 64, 66]:
         value, comm_result, error = packetHandler.read1ByteTxRx(portHandler, servo_id, addr)
     else:
         value, comm_result, error = packetHandler.read2ByteTxRx(portHandler, servo_id, addr)
-        value = ((value & 0xFF) << 8) | ((value >> 8) & 0xFF)
+        if swap_bytes_enabled:
+            value = swap_bytes(value)
 
     if comm_result != COMM_SUCCESS:
         print("Communication error:", packetHandler.getTxRxResult(comm_result))
@@ -130,16 +130,12 @@ def write_address(servo_id, address_name, value):
 
     addr = CT_ADDRESS[address_name]
 
-    # Специальная обработка для P_CW_DEAD и P_CCW_DEAD
-    if address_name in ["P_CW_DEAD", "P_CCW_DEAD"]:
-        comm_result, error = packetHandler.write1ByteTxRx(portHandler, servo_id, addr, value)
-    # Для остальных адресов
-    elif addr in [3, 4, 5, 6, 7, 8, 13, 14, 15, 19, 20, 21, 22, 23, 35, 36, 40, 41, 48, 62, 63, 64, 66]:
+    if addr in [3, 4, 5, 6, 7, 8, 13, 14, 15, 19, 20, 21, 22, 23, 31, 35, 36, 40, 41, 48, 62, 63, 64, 66]:
         comm_result, error = packetHandler.write1ByteTxRx(portHandler, servo_id, addr, value)
     else:
-        # 2-байтовая запись с коррекцией порядка байт
-        value_to_write = ((value & 0xFF) << 8) | ((value >> 8) & 0xFF)
-        comm_result, error = packetHandler.write2ByteTxRx(portHandler, servo_id, addr, value_to_write)
+        if swap_bytes_enabled:
+            value = swap_bytes(value)
+        comm_result, error = packetHandler.write2ByteTxRx(portHandler, servo_id, addr, value)
 
     if comm_result != COMM_SUCCESS:
         print("Communication error:", packetHandler.getTxRxResult(comm_result))
@@ -153,11 +149,12 @@ def write_address(servo_id, address_name, value):
 
 def print_menu():
     print("\nSCServo Control Table Editor")
-    print("1. Read all values")
+    print(f"1. Read all values (Byte swap: {'ON' if swap_bytes_enabled else 'OFF'})")
     print("2. Read specific address")
     print("3. Write to address")
     print("4. Change Servo ID")
-    print("5. Exit")
+    print("5. Toggle byte swap (currently " + ("ON" if swap_bytes_enabled else "OFF") + ")")
+    print("6. Exit")
 
 
 def get_servo_id():
@@ -166,21 +163,19 @@ def get_servo_id():
             servo_id = int(input("Enter Servo ID (0-255): "))
             if 0 <= servo_id <= 255:
                 return servo_id
-            else:
-                print("ID must be between 0 and 255")
+            print("ID must be between 0 and 255")
         except ValueError:
             print("Please enter a valid number")
 
 
 def main():
+    global swap_bytes_enabled
+
     if not setup_connection():
         return
 
-    # Set initial servo ID
     servo_id = SCS_ID
-
-    # Unlock EEPROM
-    write_address(servo_id, "P_LOCK", 0)
+    write_address(servo_id, "P_LOCK", 0)  # Unlock EEPROM
 
     while True:
         print(f"\nCurrent Servo ID: {servo_id}")
@@ -192,14 +187,12 @@ def main():
             continue
 
         if choice == 1:
-            # Read all values
             values = read_all_values(servo_id)
             print("\nCurrent values:")
             for name, value in values.items():
                 print(f"{name} (addr {CT_ADDRESS[name]}): {value}")
 
         elif choice == 2:
-            # Read specific address
             print("\nAvailable addresses:")
             for name in CT_ADDRESS:
                 print(name)
@@ -210,7 +203,6 @@ def main():
                 print(f"{addr_name} (addr {CT_ADDRESS[addr_name]}): {value}")
 
         elif choice == 3:
-            # Write to address
             print("\nAvailable addresses:")
             for name in CT_ADDRESS:
                 print(name)
@@ -220,24 +212,25 @@ def main():
                 value = int(input("Enter new value: "))
                 if write_address(servo_id, addr_name, value):
                     print("Write successful")
-                    # Verify write
                     read_value = read_address(servo_id, addr_name)
                     print(f"New value: {read_value}")
             except ValueError:
                 print("Invalid value")
 
         elif choice == 4:
-            # Change Servo ID
             servo_id = get_servo_id()
             print(f"Servo ID changed to {servo_id}")
 
         elif choice == 5:
+            swap_bytes_enabled = not swap_bytes_enabled
+            print(f"Byte swap {'enabled' if swap_bytes_enabled else 'disabled'}")
+
+        elif choice == 6:
             break
 
         else:
             print("Invalid option")
 
-    # Disable torque and close port
     write_address(servo_id, "P_TORQUE_ENABLE", 0)
     portHandler.closePort()
 
