@@ -52,7 +52,13 @@ CT_ADDRESS = {
 # Default settings
 SCS_ID = 1  # Default SCServo ID
 BAUDRATE = 1000000  # SCServo default baudrate : 1000000
-DEVICENAME = 'COM3'
+
+# Auto-detect OS and set default port
+if os.name == 'nt':  # Windows
+    DEVICENAME = 'COM3'
+else:  # Linux/Mac
+    DEVICENAME = '/dev/ttyUSB0'
+
 protocol_end = 1  # SCServo bit end(STS/SMS=0, SCS=1)
 
 # Global swap bytes setting
@@ -72,12 +78,22 @@ packetHandler = PacketHandler(protocol_end)
 
 
 def setup_connection():
+    print(f"Connecting to port: {DEVICENAME}")
     if not portHandler.openPort():
-        print("Failed to open the port")
+        print(f"Failed to open the port {DEVICENAME}")
+        print("Available ports:")
+        if os.name == 'nt':  # Windows
+            print("Try COM1, COM2, COM3, etc.")
+        else:  # Linux/Mac
+            print("Try /dev/ttyUSB0, /dev/ttyACM0, etc.")
         return False
+
     if not portHandler.setBaudRate(BAUDRATE):
         print("Failed to change the baudrate")
+        portHandler.closePort()
         return False
+
+    print(f"Successfully connected to {DEVICENAME} at {BAUDRATE} baud")
     return True
 
 
@@ -154,7 +170,8 @@ def print_menu():
     print("3. Write to address")
     print("4. Change Servo ID")
     print("5. Toggle byte swap (currently " + ("ON" if swap_bytes_enabled else "OFF") + ")")
-    print("6. Exit")
+    print("6. Change port (current: " + DEVICENAME + ")")
+    print("7. Exit")
 
 
 def get_servo_id():
@@ -169,7 +186,7 @@ def get_servo_id():
 
 
 def main():
-    global swap_bytes_enabled
+    global swap_bytes_enabled, DEVICENAME, portHandler
 
     if not setup_connection():
         return
@@ -226,6 +243,14 @@ def main():
             print(f"Byte swap {'enabled' if swap_bytes_enabled else 'disabled'}")
 
         elif choice == 6:
+            new_port = input(f"Enter new port (current: {DEVICENAME}): ")
+            portHandler.closePort()
+            DEVICENAME = new_port
+            portHandler = PortHandler(DEVICENAME)
+            if not setup_connection():
+                return
+
+        elif choice == 7:
             break
 
         else:
